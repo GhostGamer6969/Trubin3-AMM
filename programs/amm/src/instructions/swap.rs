@@ -1,9 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{mint_to, transfer, Mint, MintTo, Token, TokenAccount, Transfer},
+    token::{transfer, Mint, Token, TokenAccount, Transfer},
 };
-use constant_product_curve::ConstantProduct;
+use constant_product_curve::{ConstantProduct, LiquidityPair};
 
 use crate::{error::AmmError, state::Config};
 
@@ -69,8 +69,10 @@ impl<'info> Swap<'info> {
         );
 
         let amount_in_with_fee = (amount_in as u128 * (10_000 - self.config.fee as u128)) / 10_000;
-        let amount_out = (amount_in_with_fee * vault_dst.amount as u128
-            / (vault_src.amount as u128 + amount_in_with_fee)) as u64;
+
+        let amount_out =
+            ConstantProduct::x2_from_y_swap_amount(vault_src.amount, vault_dst.amount, amount_in)
+                .unwrap();
 
         require!(amount_out != 0, AmmError::InvalidAmount);
 
@@ -79,8 +81,14 @@ impl<'info> Swap<'info> {
             AmmError::LiquidityLessThanMinimum
         );
 
-        let expected_price = (vault_dst.amount as u128 * 1_000_000) / vault_src.amount as u128;
-        let executed_price = (amount_out as u128 * 1_000_000) / amount_in_with_fee;
+        let expected_price =
+            ConstantProduct::spot_price_from_pair(vault_dst.amount, vault_src.amount, 6)
+                .unwrap()
+                .amount;
+        let executed_price =
+            ConstantProduct::spot_price_from_pair(amount_out, amount_in_with_fee as u64, 6)
+                .unwrap()
+                .amount;
 
         let actual_slippage_bps = if expected_price > 0 {
             if executed_price <= expected_price {
