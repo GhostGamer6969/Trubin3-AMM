@@ -18,6 +18,6 @@ pub mod amm {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
-        initialize::handler(ctx)
+        todo!()
     }
 }

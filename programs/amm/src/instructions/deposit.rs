@@ -69,7 +69,7 @@ pub struct Deposit<'info> {
 impl<'info> Deposit<'info> {
     pub fn deposit(&mut self, amount: u64, max_x: u64, max_y: u64) -> Result<()> {
         require!(self.config.locked == false, AmmError::PoolLocked);
-        require!(amount != 0, AmmError::InvalidAmount);
+        require!(amount > 0, AmmError::InvalidAmount);
 
         let (x, y) = match self.mint_lp.supply == 0
             && self.vault_x.amount == 0
@@ -89,8 +89,8 @@ impl<'info> Deposit<'info> {
             }
         };
         require!(x <= max_x && y <= max_y, AmmError::SlippageExceeded);
-        self.deposit_tokens(true, x);
-        self.deposit_tokens(false, y);
+        self.deposit_tokens(true, x)?;
+        self.deposit_tokens(false, y)?;
         self.mint_lp_token(amount)
     }
 
