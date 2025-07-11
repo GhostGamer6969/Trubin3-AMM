@@ -72,6 +72,8 @@ impl<'info> Swap<'info> {
         let amount_out = (amount_in_with_fee * vault_dst.amount as u128
             / (vault_src.amount as u128 + amount_in_with_fee)) as u64;
 
+        require!(amount_out != 0, AmmError::InvalidAmount);
+
         require!(
             vault_dst.amount >= amount_out,
             AmmError::LiquidityLessThanMinimum
@@ -90,25 +92,41 @@ impl<'info> Swap<'info> {
             return err!(AmmError::InvalidAmount);
         };
 
-
         require!(
             actual_slippage_bps <= slippage as u128,
             AmmError::SlippageExceeded
         );
 
-        let cpi_in_accounts = Transfer {
-            to: vault_dst.to_account_info(),
-            from: user_src.to_account_info(),
+        self.to_vault(user_src, vault_dst, amount_in)?;
+        self.to_user(user_dst, vault_src, amount_out)
+    }
+
+    pub fn to_vault(
+        &self,
+        user: &Account<'info, TokenAccount>,
+        vault: &Account<'info, TokenAccount>,
+        amount: u64,
+    ) -> Result<()> {
+        let cpi_accounts = Transfer {
+            to: vault.to_account_info(),
+            from: user.to_account_info(),
             authority: self.user.to_account_info(),
         };
         let cpi_program = self.token_program.to_account_info();
-        let cpi_in_ctx = CpiContext::new(cpi_program, cpi_in_accounts);
+        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
 
-        transfer(cpi_in_ctx, amount_in)?;
+        transfer(cpi_ctx, amount)
+    }
 
-        let cpi_out_accounts = Transfer {
-            to: user_dst.to_account_info(),
-            from: vault_src.to_account_info(),
+    pub fn to_user(
+        &self,
+        user: &Account<'info, TokenAccount>,
+        vault: &Account<'info, TokenAccount>,
+        amount: u64,
+    ) -> Result<()> {
+        let cpi_accounts = Transfer {
+            to: user.to_account_info(),
+            from: vault.to_account_info(),
             authority: self.config.to_account_info(),
         };
 
@@ -119,9 +137,8 @@ impl<'info> Swap<'info> {
         ];
         let signer_seed = &[&seeds[..]];
         let cpi_program = self.token_program.to_account_info();
-        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_out_accounts, signer_seed);
+        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer_seed);
 
-        transfer(cpi_ctx, amount_out)
+        transfer(cpi_ctx, amount)
     }
-
 }
