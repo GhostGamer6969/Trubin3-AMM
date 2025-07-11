@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 
 #[account]
+#[derive(InitSpace)]
 pub struct Config {
     pub seed: u64,
     pub authority: Option<Pubkey>,
