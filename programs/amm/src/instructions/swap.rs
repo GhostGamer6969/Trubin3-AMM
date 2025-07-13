@@ -57,9 +57,9 @@ impl<'info> Swap<'info> {
         require!(amount_in != 0, AmmError::InvalidAmount);
 
         let (user_src, user_dst, vault_src, vault_dst) = if x_to_y {
-            (&self.user_x, &self.user_y, &self.vault_x, &self.vault_y)
+            (&self.user_x, &self.user_y, &self.vault_y, &self.vault_x)
         } else {
-            (&self.user_y, &self.user_x, &self.vault_y, &self.vault_x)
+            (&self.user_y, &self.user_x, &self.vault_x, &self.vault_y)
         };
 
         require!(user_src.amount >= amount_in, AmmError::InsufficientBalance);
@@ -70,9 +70,9 @@ impl<'info> Swap<'info> {
 
         let amount_in_with_fee = (amount_in as u128 * (10_000 - self.config.fee as u128)) / 10_000;
 
-        let amount_out = ConstantProduct::x2_from_y_swap_amount(
-            vault_src.amount,
+        let amount_out = ConstantProduct::delta_x_from_y_swap_amount(
             vault_dst.amount,
+            vault_src.amount,
             amount_in_with_fee as u64,
         )
         .unwrap();
