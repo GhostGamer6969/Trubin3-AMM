@@ -6,10 +6,10 @@ import { PublicKey } from "@solana/web3.js"
 // import { bytes } from "@coral-xyz/anchor/dist/cjs/utils";
 import { expect } from "chai";
 import { SendTransactionError } from "@solana/web3.js";
+
 import { getAccount, getAssociatedTokenAddress, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 
 describe("amm", () => {
-  // Configure the client to use the local cluster.
   const provider = anchor.AnchorProvider.env()
   anchor.setProvider(provider);
 
@@ -81,6 +81,7 @@ describe("amm", () => {
       expect(e.message).to.include("already in use");
     }
   });
+
   it("Deposit!", async () => {
     const userZoroATA = await getOrCreateAssociatedTokenAccount(provider.connection, wallet.payer, Zoro, wallet.publicKey);
     const userG5ATA = await getOrCreateAssociatedTokenAccount(provider.connection, wallet.payer, G5, wallet.publicKey);
@@ -109,7 +110,26 @@ describe("amm", () => {
     expect(Number(userLpAfter.amount)).to.be.greaterThan(Number(userLpBefore.amount));
 
   });
+  it("fails to deposit invalid amount!", async () => {
+    const depositAmount = new anchor.BN(0);
 
+    try {
+      await program.methods
+        .deposit(depositAmount, max_zoro, max_g5)
+        .accountsPartial({
+          user: wallet.publicKey,
+          mintX: Zoro,
+          mintY: G5,
+          mintLp: lp,
+          config: config,
+        })
+        .rpc();
+      expect.fail("Deposit should have failed due to invalid amount");
+    } catch (e) {
+      expect(e).to.have.property("logs");
+      expect(e.logs.join("\n")).to.include("Invalid amount.");
+    }
+  });
 
   it("Swapping Zoro to Gear5!", async () => {
     const userZoroATA = await getAssociatedTokenAddress(Zoro, wallet.publicKey);
@@ -117,7 +137,16 @@ describe("amm", () => {
     const vaultZoro = await getAssociatedTokenAddress(Zoro, config, true);
     const vaultG5 = await getAssociatedTokenAddress(G5, config, true);
 
-    const tx = await program.methods.swap(true, new anchor.BN(50 * 1_000_000), 500)
+    const userZoroBefore = await getAccount(provider.connection, userZoroATA);
+    const userG5Before = await getAccount(provider.connection, userG5ATA);
+    const vaultZoroBefore = await getAccount(provider.connection, vaultZoro);
+    const vaultG5Before = await getAccount(provider.connection, vaultG5);
+
+    const amountIn = new anchor.BN(50 * 1_000_000);
+    const slippage = 500;
+
+    const tx = await program.methods
+      .swap(true, amountIn, slippage)
       .accountsPartial({
         user: wallet.publicKey,
         mintX: Zoro,
@@ -126,7 +155,15 @@ describe("amm", () => {
       })
       .rpc();
 
-    console.log("Your transaction signature", tx);
+    const userZoroAfter = await getAccount(provider.connection, userZoroATA);
+    const userG5After = await getAccount(provider.connection, userG5ATA);
+    const vaultZoroAfter = await getAccount(provider.connection, vaultZoro);
+    const vaultG5After = await getAccount(provider.connection, vaultG5);
+
+    expect(Number(userZoroAfter.amount)).to.be.lessThan(Number(userZoroBefore.amount));
+    expect(Number(userG5After.amount)).to.be.greaterThan(Number(userG5Before.amount));
+    expect(Number(vaultZoroAfter.amount)).to.be.greaterThan(Number(vaultZoroBefore.amount));
+    expect(Number(vaultG5After.amount)).to.be.lessThan(Number(vaultG5Before.amount));
   });
 
   it("Swapping Gear5 to Zoro!", async () => {
@@ -135,7 +172,16 @@ describe("amm", () => {
     const vaultZoro = await getAssociatedTokenAddress(Zoro, config, true);
     const vaultG5 = await getAssociatedTokenAddress(G5, config, true);
 
-    const tx = await program.methods.swap(false, new anchor.BN(50 * 1_000_000), 500)
+    const userZoroBefore = await getAccount(provider.connection, userZoroATA);
+    const userG5Before = await getAccount(provider.connection, userG5ATA);
+    const vaultZoroBefore = await getAccount(provider.connection, vaultZoro);
+    const vaultG5Before = await getAccount(provider.connection, vaultG5);
+
+    const amountIn = new anchor.BN(50 * 1_000_000);
+    const slippage = 500;
+
+    const tx = await program.methods
+      .swap(false, amountIn, slippage)
       .accountsPartial({
         user: wallet.publicKey,
         mintX: Zoro,
@@ -144,6 +190,15 @@ describe("amm", () => {
       })
       .rpc();
 
-    console.log("Your transaction signature", tx);
+    const userZoroAfter = await getAccount(provider.connection, userZoroATA);
+    const userG5After = await getAccount(provider.connection, userG5ATA);
+    const vaultZoroAfter = await getAccount(provider.connection, vaultZoro);
+    const vaultG5After = await getAccount(provider.connection, vaultG5);
+
+    expect(Number(userG5After.amount)).to.be.lessThan(Number(userG5Before.amount));
+    expect(Number(userZoroAfter.amount)).to.be.greaterThan(Number(userZoroBefore.amount));
+    expect(Number(vaultG5After.amount)).to.be.greaterThan(Number(vaultG5Before.amount));
+    expect(Number(vaultZoroAfter.amount)).to.be.lessThan(Number(vaultZoroBefore.amount));
   });
+
 });
