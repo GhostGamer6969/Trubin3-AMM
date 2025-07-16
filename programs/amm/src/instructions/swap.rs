@@ -1,9 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{transfer, Mint, Token, TokenAccount, Transfer},
+    token::{transfer, transfer_checked, Mint, Token, TokenAccount, Transfer, TransferChecked},
 };
-use constant_product_curve::ConstantProduct;
+use constant_product_curve::{ConstantProduct, LiquidityPair};
 
 use crate::{error::AmmError, state::Config};
 
@@ -13,6 +13,13 @@ pub struct Swap<'info> {
     pub user: Signer<'info>,
     pub mint_x: Account<'info, Mint>,
     pub mint_y: Account<'info, Mint>,
+    #[account(
+        seeds = [b"lp",config.key().as_ref()],
+        bump=config.lp_bump,
+        mint::decimals = 6,
+        mint::authority = config,
+    )]
+    pub mint_lp: Account<'info, Mint>,
     #[account(
         has_one = mint_x,
         has_one = mint_y,
@@ -52,86 +59,90 @@ pub struct Swap<'info> {
 }
 
 impl<'info> Swap<'info> {
-    pub fn swap(&mut self, x_to_y: bool, amount_in: u64, slippage: u16) -> Result<()> {
+    pub fn swap(&mut self, is_x: bool, amount: u64, min: u64) -> Result<()> {
         require!(self.config.locked == false, AmmError::PoolLocked);
-        require!(amount_in != 0, AmmError::InvalidAmount);
+        require!(amount != 0, AmmError::InvalidAmount);
 
-        let (user_src, user_dst, vault_src, vault_dst) = if x_to_y {
-            (&self.user_x, &self.user_y, &self.vault_y, &self.vault_x)
-        } else {
-            (&self.user_y, &self.user_x, &self.vault_x, &self.vault_y)
+        let mut curve = ConstantProduct::init(
+            self.vault_x.amount,
+            self.vault_y.amount,
+            self.mint_lp.supply,
+            self.config.fee,
+            None,
+        )
+        .map_err(AmmError::from)?;
+
+        let p = match is_x {
+            true => LiquidityPair::X,
+            false => LiquidityPair::Y,
         };
 
-        require!(user_src.amount >= amount_in, AmmError::InsufficientBalance);
-        require!(
-            vault_src.amount > 0 && vault_dst.amount > 0,
-            AmmError::NoLiquidityInPool
-        );
+        let result = curve.swap(p, amount, min).map_err(AmmError::from)?;
 
-        let amount_in_with_fee = (amount_in as u128 * (10_000 - self.config.fee as u128)) / 10_000;
-
-        let amount_out = ConstantProduct::delta_x_from_y_swap_amount(
-            vault_dst.amount,
-            vault_src.amount,
-            amount_in_with_fee as u64,
-        )
-        .unwrap();
-
-        require!(amount_out != 0, AmmError::InvalidAmount);
-
-        require!(
-            vault_dst.amount >= amount_out,
-            AmmError::LiquidityLessThanMinimum
-        );
-
-        let min_amount_out = (amount_in_with_fee * (10_000 - slippage as u128)) / 10_000;
-        require!(
-            amount_out as u128 >= min_amount_out,
-            AmmError::SlippageExceeded
-        );
-
-        self.to_vault(user_src, vault_dst, amount_in)?;
-        self.to_user(user_dst, vault_src, amount_out)
+        self.deposit_token(is_x, result.deposit)?;
+        self.withdraw_token(is_x, result.withdraw)
     }
 
-    pub fn to_vault(
-        &self,
-        user: &Account<'info, TokenAccount>,
-        vault: &Account<'info, TokenAccount>,
-        amount: u64,
-    ) -> Result<()> {
-        let cpi_accounts = Transfer {
-            to: vault.to_account_info(),
-            from: user.to_account_info(),
+    pub fn deposit_token(&mut self, is_x: bool, amount: u64) -> Result<()> {
+        let (mint, from, to) = match is_x {
+            true => (
+                self.mint_x.to_account_info(),
+                self.user_x.to_account_info(),
+                self.vault_x.to_account_info(),
+            ),
+            false => (
+                self.mint_y.to_account_info(),
+                self.user_y.to_account_info(),
+                self.vault_y.to_account_info(),
+            ),
+        };
+
+        let account = TransferChecked {
+            from,
+            mint,
+            to,
             authority: self.user.to_account_info(),
         };
-        let cpi_program = self.token_program.to_account_info();
-        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-
-        transfer(cpi_ctx, amount)
+        let ctx = CpiContext::new(self.token_program.to_account_info(), account);
+        transfer_checked(ctx, amount, 6)
     }
 
-    pub fn to_user(
-        &self,
-        user: &Account<'info, TokenAccount>,
-        vault: &Account<'info, TokenAccount>,
-        amount: u64,
-    ) -> Result<()> {
-        let cpi_accounts = Transfer {
-            to: user.to_account_info(),
-            from: vault.to_account_info(),
+    pub fn withdraw_token(&mut self, is_x: bool, amount: u64) -> Result<()> {
+        let (mint, from, to) = match is_x {
+            true => (
+                self.mint_x.to_account_info(),
+                self.vault_y.to_account_info(),
+                self.user_y.to_account_info(),
+            ),
+            false => (
+                self.mint_y.to_account_info(),
+                self.vault_x.to_account_info(),
+                self.user_x.to_account_info(),
+            ),
+        };
+
+        let account = TransferChecked {
+            from,
+            mint,
+            to,
             authority: self.config.to_account_info(),
         };
 
+        // [b"config",config.seed.to_le_bytes().as_ref()]
         let seeds = &[
             &b"config"[..],
             &self.config.seed.to_le_bytes(),
             &[self.config.config_bump],
         ];
-        let signer_seed = &[&seeds[..]];
-        let cpi_program = self.token_program.to_account_info();
-        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer_seed);
 
-        transfer(cpi_ctx, amount)
+        let signer_seeds = &[&seeds[..]];
+
+        let ctx = CpiContext::new_with_signer(
+            self.token_program.to_account_info(),
+            account,
+            signer_seeds,
+        );
+        transfer_checked(ctx, amount, 6)
+        // todo!()
     }
 }

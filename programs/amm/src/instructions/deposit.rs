@@ -16,7 +16,7 @@ pub struct Deposit<'info> {
     #[account(
         mut,
         seeds = [b"lp",config.key().as_ref()],
-        bump,
+        bump = config.lp_bump,
     )]
     pub mint_lp: Account<'info, Mint>,
     #[account(
