@@ -77,7 +77,7 @@ impl<'info> Deposit<'info> {
         {
             true => (max_x, max_y),
             false => {
-                let amount = ConstantProduct::xy_deposit_amounts_from_l(
+                let amounts = ConstantProduct::xy_deposit_amounts_from_l(
                     self.vault_x.amount,
                     self.vault_y.amount,
                     self.mint_lp.supply,
@@ -85,7 +85,7 @@ impl<'info> Deposit<'info> {
                     6,
                 )
                 .unwrap();
-                (amount.x, amount.y)
+                (amounts.x, amounts.y)
             }
         };
         require!(x <= max_x && y <= max_y, AmmError::SlippageExceeded);
